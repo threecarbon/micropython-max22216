@@ -583,30 +583,28 @@ class MAX22216:
     def _crc5(data: bytes | bytearray) -> int:
         """Calculate CRC-5-ITU for SPI data validation.
 
-        Polynomial: x^5 + x^4 + x^2 + 1 (0x35)
+        Polynomial: x^5 + x^4 + x^2 + 1 (0x15 without leading term)
         Initial value: 0x1F
-        Computed over all data bytes plus 3 padding zero bits.
+        Computed over all data bytes plus 3 padding zero bits
+        (the three MSBs of the check byte per datasheet Figure 13).
         Returns 5-bit FCS in the low bits of the check byte
         (high 3 bits are zero).
         """
-        # Build bit stream: all data bytes + 3 zero padding bits
         crc = 0x1F  # starting value
-        poly = 0x35  # x^5 + x^4 + x^2 + 1
+        poly = 0x15  # x^4 + x^2 + 1 (without leading x^5 term)
         for byte in data:
             for i in range(7, -1, -1):
                 bit = (byte >> i) & 1
-                if crc & 0x10:  # check MSB of 5-bit CRC
-                    crc = ((crc << 1) | bit) ^ poly
+                if ((crc >> 4) ^ bit) & 1:
+                    crc = ((crc << 1) & 0x1F) ^ poly
                 else:
-                    crc = (crc << 1) | bit
-                crc &= 0x1F
-        # Process 3 padding zero bits
+                    crc = (crc << 1) & 0x1F
+        # Process 3 padding zero bits (MSBs of CRC check byte)
         for _ in range(3):
             if crc & 0x10:
-                crc = (crc << 1) ^ poly
+                crc = ((crc << 1) & 0x1F) ^ poly
             else:
-                crc <<= 1
-            crc &= 0x1F
+                crc = (crc << 1) & 0x1F
         return crc
 
     _SPI_FLAG_NAMES = (
@@ -662,6 +660,8 @@ class MAX22216:
 
         _ = self._spi_transaction(cmd)
         cmd[0] = 0x00
+        if self._crc_enable:
+            cmd[3] = self._crc5(cmd[:3])
         response = self._spi_transaction(cmd)
 
         data = (response[1] << 8) | response[2]
