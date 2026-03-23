@@ -570,11 +570,18 @@ class MAX22216:
         self.K_VM = 9.73e-3  # V constant
         self.K_R = 8.437e-3  # Ω constant
 
-    def enable(self) -> None:
+    def enable(self, wait: bool = True) -> bool:
+        """Enable the driver. Returns True if newly enabled.
+
+        Args:
+            wait: If True (default), sleep 1ms after enabling for stabilization.
+                  Set False for batched enables where caller manages the sleep.
+        """
         previous = self._enable.value()
         self._enable.value(1)
-        if not previous:
+        if not previous and wait:
             time.sleep_ms(1)  # Wait for enable time (0.8ms min)
+        return not previous
 
     def disable(self) -> None:
         self._enable.value(0)
@@ -888,16 +895,18 @@ class MAX22216:
     }
 
     def apply_fault_mask(self, mask: int) -> None:
-        """Write fault mask bits to GLOBAL_CFG via bitfield properties.
+        """Write fault mask bits to GLOBAL_CFG in a single register write.
 
-        Uses read-modify-write to preserve other GLOBAL_CFG bits.
+        Single read-modify-write instead of 7 individual RMW cycles.
 
         Args:
             mask: 9-bit mask (bits 0-6 map to HW mask fields,
                   bits 7-8 are IND/RES with no HW equivalent).
         """
-        for bit, field_name in self._FMASK_TO_HW.items():
-            setattr(self, field_name, 1 if (mask & bit) else 0)
+        reg = self.global_config
+        reg &= ~0x7F00  # Clear M_UVM..M_OVT [14:8]
+        reg |= (mask & 0x7F) << 8  # Set new mask bits
+        self.write_register(_REG_GLOBAL_CFG, reg)
 
     def activate(
         self,
@@ -908,6 +917,9 @@ class MAX22216:
     ) -> None:
         """Activate the device (set ACTIVE bit in GLOBAL_CFG).
 
+        Sets CHS, VDR_NDUTY, ACTIVE, and fault mask bits in a single
+        read-modify-write of GLOBAL_CFG instead of multiple separate writes.
+
         Args:
             vdr: Enable VDR duty mode (voltage proportional
                  to target, not supply).
@@ -917,14 +929,17 @@ class MAX22216:
                          clear fault registers.
             fault_mask: 9-bit fault mask to apply after activation.
         """
-        self.chs = chs & 0x0F
-        self.vdr_nduty = int(vdr)
-        self.active = 1
+        # Single read-modify-write: CHS + VDR + fault mask + ACTIVE
+        reg = self.global_config
+        reg &= 0x0060  # Preserve reserved[5], STAT_POL[6], CNTL_POL[7]
+        reg |= chs & 0x0F  # CHS[3:0]
+        reg |= int(vdr) << 4  # VDR_NDUTY[4]
+        reg |= (fault_mask & 0x7F) << 8  # M_UVM..M_OVT[14:8]
+        reg |= 0x8000  # ACTIVE[15]
+        self.write_register(_REG_GLOBAL_CFG, reg)
         if clear_flags:
             time.sleep_ms(10)
             self.fault_clear()
-        if fault_mask:
-            self.apply_fault_mask(fault_mask)
 
     def config_channel(
         self,
