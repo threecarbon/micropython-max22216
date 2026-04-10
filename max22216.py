@@ -813,6 +813,22 @@ class MAX22216:
         scale = self._channel_scale(channel)
         return int(delta_ma / (8 * scale * self.K_CDR))
 
+    def ma_to_dpm_start(self, ma: float, channel: int = 0) -> int:
+        """Convert DPM start current in mA to DPM_START register value.
+
+        DPM_START is the current level above which the DPM algorithm
+        begins searching for the BEMF plunger-movement dip. Per
+        datasheet page 38:
+
+            DPM_START(mA) = 64 × K_CDR × GAIN × SNSF × DPM_START[7:0]
+
+        Returns a value in range [1, 255] (never 0 — setting 0 would
+        trigger immediate search on power-up and produce spurious
+        results during the pre-ramp settling period).
+        """
+        scale = self._channel_scale(channel)
+        return max(1, min(255, int(ma / (64 * scale * self.K_CDR))))
+
     # ----- convenience functions
 
     @property
@@ -1002,12 +1018,13 @@ class MAX22216:
                 channel, dpm_thld, dpm_start, dpm_min_nbr,
                 end_hit_auto, end_hit_to_hiz_auto,
             )
-        # L_MEAS_H and L_MEAS_L2H select which phases to measure during.
-        # L_MEAS_EN (master enable) is toggled separately at fire time to
-        # avoid IND faults while the channel is off.
-        if l_meas_h or l_meas_l2h:
-            self.write_register(_REG_F_AC, f_ac)
-            self.write_register(_REG_U_AC_SCAN, u_ac)
+        # F_AC and U_AC_SCAN are global sine-wave generator parameters.
+        # Write them unconditionally — the generator runs during DC_L
+        # whenever L_MEAS_EN is set, not only during DC_L2H/DC_H when
+        # l_meas_l2h/l_meas_h are enabled. L_MEAS_EN itself is toggled
+        # by the caller at fire time to avoid IND faults while idle.
+        self.write_register(_REG_F_AC, f_ac)
+        self.write_register(_REG_U_AC_SCAN, u_ac)
         if l_meas_h:
             setattr(self, f"l_meas_h_{channel}", 1)
         if l_meas_l2h:
@@ -1236,19 +1253,18 @@ class MAX22216:
         # Inductance: L = U_AC_SCAN / (2π × F_AC × I_AC)
         # F_AC (Hz) = F_PWM_M (Hz) × (F_AC_SCAN / 65535)
         # U_AC_SCAN voltage = K_VDR × 36 × U_AC_SCAN_reg (VDR mode)
-        if i_ac_ma > 1:
-            f_ac_reg = self.read_register(_REG_F_AC) & 0x0FFF
-            f_hz = f_khz * 1000 * (f_ac_reg / _F_AC_DIVISOR)
-            u_ac_reg = self.read_register(_REG_U_AC_SCAN) & 0x7FFF
-            u_ac_v = self.K_VDR * 36 * u_ac_reg
-            if f_hz > 0:
-                ind_mh = round(
-                    (u_ac_v / (_TWO_PI * f_hz * (i_ac_ma / 1000)))
-                    * 1000,
-                    2,
-                )
-            else:
-                ind_mh = 0
+        # All three inputs (I_AC, F_AC, U_AC_SCAN) must be non-zero
+        # for the calculation to be meaningful.
+        f_ac_reg = self.read_register(_REG_F_AC) & 0x0FFF
+        u_ac_reg = self.read_register(_REG_U_AC_SCAN) & 0x7FFF
+        f_hz = f_khz * 1000 * (f_ac_reg / _F_AC_DIVISOR) if f_khz else 0
+        u_ac_v = self.K_VDR * 36 * u_ac_reg
+        if i_ac_ma > 1 and f_hz > 0 and u_ac_reg > 0:
+            ind_mh = round(
+                (u_ac_v / (_TWO_PI * f_hz * (i_ac_ma / 1000)))
+                * 1000,
+                2,
+            )
         else:
             ind_mh = 0
 
