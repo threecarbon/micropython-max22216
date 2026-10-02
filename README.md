@@ -37,7 +37,9 @@ Single file. No dependencies. MicroPython, not CircuitPython.
 - Configurable fault masking
 
 ### Driver Implementation
-- SPI register read/write with optional CRC-5 validation
+- SPI register read/write with optional CRC-5 validation (table-driven, one lookup per byte)
+- Diagnostics as integers in a per-channel dict filled in place, so a periodic read allocates nothing; a live-only read of the three registers that move while a channel is driven
+- Configuration the diagnostics depend on (SNSF/GAIN, PWM frequency, AC scan) cached until the register is written
 - Property accessors for all register bitfields (generated at import time)
 - Register dump and `test()` diagnostic summary
 - MAX22216 and MAX22217 variant support (automatic current scaling)
@@ -61,7 +63,7 @@ Single file. No dependencies. MicroPython, not CircuitPython.
 from machine import SPI, Pin
 from max22216 import MAX22216
 
-spi = SPI(1, baudrate=250_000, polarity=0, phase=0)
+spi = SPI(1, baudrate=5_000_000, polarity=0, phase=0)   # the device is rated to 10 MHz
 cs = Pin(17, Pin.OUT, value=1)
 enable = Pin(16, Pin.OUT, value=0)
 
@@ -100,22 +102,38 @@ drv.config_channel(
 )
 ```
 
+`dpm_enable=False` clears DPM_EN (it persists across configurations otherwise), `l_meas_h` and `l_meas_l2h` are written both ways, and `ramp`, `rupe` and `rdwe` set the ramp controls in CTRL0. `dpm_start` is a current level (about 65 mA per unit at default scaling; see `ma_to_dpm_start()`), not a delay.
+
 ### Firing a Channel
 
 ```python
 drv.set_channel(0, True)    # enable channel 0
 drv.set_channel(0, False)   # disable channel 0
+drv.all_channels_off()      # clear every CNTL bit, e.g. before (re)activation
 ```
 
 ### Diagnostics
 
 ```python
-# Full scaled diagnostics
+# Full scaled diagnostics: integers, so a periodic read allocates nothing
 diag = drv.diagnostics(0)
-print(f"Current: {diag['i_monitor_ma']}mA")
-print(f"Resistance: {diag['resistance_ohm']}Ω")
-print(f"Inductance: {diag['inductance_mh']}mH")
-print(f"PWM duty: {diag['pwm_duty']}%")
+print(f"Supply: {diag['voltage_mv'] / 1000} V")
+print(f"Current: {diag['i_monitor_ma']} mA")
+print(f"Resistance: {diag['resistance_mohm'] / 1000} Ω")
+print(f"Inductance: {diag['inductance_uh'] / 1000} mH")
+print(f"PWM duty: {diag['pwm_duty_permille'] / 10} %")
+# also: peak_ma, valley_ma, travel_us, reaction_us, i_ac_ma
+
+# The dict is one object per channel, refilled in place: copy it to keep a snapshot
+snapshot = dict(diag)
+
+# While a channel is held, only the monitor current, AC current and PWM duty
+# move; read just those (three register reads) and keep the DPM, travel,
+# reaction and resistance values from the last full read
+diag = drv.diagnostics(0, live_only=True)
+
+# Pass a supply voltage you already have to save the VM read
+diag = drv.diagnostics(0, vm=drv.vm)
 
 # DPM diagnostics (peak_mA, valley_mA, travel_ms, reaction_ms)
 peak, valley, travel, react = drv.dpm(0)
@@ -133,7 +151,9 @@ print(f"VM: {drv.vm:.2f}V")
 # Read combined fault register (32-bit: fault1 << 16 | fault0)
 print(f"Faults: 0x{drv.fault:08X}")
 
-# Clear all faults
+# Clear all faults. The status byte that comes back with a frame describes
+# the state before the frame took effect, so a COMER reported by the clear
+# itself is ignored; a persistent fault shows up on the next read.
 drv.fault_clear()
 
 # Read individual fault bits via bitfield accessors
@@ -199,7 +219,10 @@ drv.test()
 ```python
 drv = MAX22216(spi, cs, enable, crc_enable=True)
 # All SPI transactions now include CRC-5 validation
-# Raises MAX22216CRCError on mismatch
+# Raises MAX22216CRCError (a MAX22216SPIError) on mismatch, so one handler
+# covers communication errors and corrupted replies alike
+# The read command frames are built once per register; MAX22216.reads counts
+# register reads across all instances for profiling (reset it yourself)
 ```
 
 ### MAX22217 Variant

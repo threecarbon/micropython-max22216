@@ -33,7 +33,7 @@ from machine import Pin, SPI, SoftSPI
 from micropython import const
 
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 # global registers
@@ -417,9 +417,6 @@ _BITFIELDS = {
 }
 
 # SPI Timing Constants (in nanoseconds, converted to microseconds for delays)
-_SPI_CLK_MIN_PERIOD_US = const(1)  # 100ns min -> 1us for safety
-_SPI_SETUP_TIME_US     = const(1)  # 10ns setup -> 1us for safety
-_SPI_HOLD_TIME_US      = const(1)  # 10ns hold -> 1us for safety
 
 # Diagnostic scaling constants
 _TWO_PI                = 6.283185307
@@ -432,12 +429,49 @@ class MAX22216SPIError(Exception):
     """Exception raised for MAX22216 SPI communication errors."""
 
 
-class MAX22216CRCError(Exception):
-    """Exception raised for CRC validation errors."""
+class MAX22216CRCError(MAX22216SPIError):
+    """Exception raised for CRC validation errors.
+
+    A subclass of the SPI error: a CRC-corrupted read is a communication
+    failure like any other, so a caller that retries or clears faults on
+    MAX22216SPIError handles it the same way.
+    """
 
 
 class MAX22216BitfieldWriteError(Exception):
     """Exception raised for writing to a no-write bitfield."""
+
+
+def _build_crc5_tables():
+    """State-transition tables for the table-driven CRC-5: ``table[(state
+    << 8) | byte]`` is the state after one data byte, ``pad[state]`` the
+    check value after the three padding bits. Built from the bitwise
+    reference so the two can never disagree."""
+    poly = 0x15
+    table = bytearray(32 * 256)
+    for state in range(32):
+        for byte in range(256):
+            crc = state
+            for i in range(7, -1, -1):
+                bit = (byte >> i) & 1
+                if ((crc >> 4) ^ bit) & 1:
+                    crc = ((crc << 1) & 0x1F) ^ poly
+                else:
+                    crc = (crc << 1) & 0x1F
+            table[(state << 8) | byte] = crc
+    pad = bytearray(32)
+    for state in range(32):
+        crc = state
+        for _ in range(3):
+            if crc & 0x10:
+                crc = ((crc << 1) & 0x1F) ^ poly
+            else:
+                crc = (crc << 1) & 0x1F
+        pad[state] = crc
+    return bytes(table), bytes(pad)
+
+
+_CRC5_TABLE, _CRC5_PAD = _build_crc5_tables()
 
 
 class MAX22216:
@@ -545,6 +579,21 @@ class MAX22216:
         self._cs = cs_pin
         self._enable = enable_pin
         self._crc_enable = crc_enable
+        self._scale_cache: dict = {}
+        self._kint_cache: dict = {}  # channel -> (k_milli, k_dpm_centi) integer current scales
+        self._pwm_cache: dict = {}
+        self._ac_cache: tuple | None = None  # (F_AC, U_AC_SCAN) until written
+        # One output dict per channel, filled in place by diagnostics():
+        # a fresh dict and a dozen boxed floats per channel per pass were
+        # ~6 KB/s of heap growth and an automatic 38 ms collection every
+        # few seconds while channels were open.
+        self._diag_out: list = [None, None, None, None]
+        # Event registers (DPM peak/valley, travel, reaction, resistance)
+        # latch at a switching edge and do not move while a channel is
+        # held or idle; the last full read is kept per channel so a
+        # live-only read can return a complete dict.
+        self._event_cache: dict = {}
+        self._rx4 = bytearray(4)  # reply buffer for the 4-byte (CRC) frames
         self._device_variant = device_variant
         self.fault_pin = fault_pin
         self.cntl0_pin = cntl0_pin
@@ -587,8 +636,24 @@ class MAX22216:
         self._enable.value(0)
 
     @staticmethod
-    def _crc5(data: bytes | bytearray) -> int:
-        """Calculate CRC-5-ITU for SPI data validation.
+    def _crc5(data: bytes | bytearray, n: int = -1) -> int:
+        """CRC-5-ITU of ``data`` (its first ``n`` bytes when given, so the
+        hot path slices nothing) plus the three padding bits, table-driven.
+
+        Bit-exact with ``_crc5_bitwise`` (the table is built from it at
+        import); ~20 µs instead of ~420 µs per call on the RP2350.
+        """
+        crc = 0x1F
+        table = _CRC5_TABLE
+        if n < 0:
+            n = len(data)
+        for i in range(n):
+            crc = table[(crc << 8) | data[i]]
+        return _CRC5_PAD[crc]
+
+    @staticmethod
+    def _crc5_bitwise(data: bytes | bytearray) -> int:
+        """Calculate CRC-5-ITU for SPI data validation (reference).
 
         Polynomial: x^5 + x^4 + x^2 + 1 (0x15 without leading term)
         Initial value: 0x1F
@@ -636,45 +701,58 @@ class MAX22216:
         if flags & 0x10:
             raise MAX22216SPIError("Communication error (COMER)")
 
-    def _spi_transaction(self, write_data: bytearray) -> bytearray:
-        self._cs.on()
-        time.sleep_us(_SPI_SETUP_TIME_US)
+    def _spi_transaction(self, write_data) -> bytearray:
+        """One chip-select cycle: clock ``write_data`` out, the status byte
+        and the reply in.
 
-        self._cs.off()
-        time.sleep_us(_SPI_SETUP_TIME_US)
-
+        No explicit setup/hold waits: the datasheet's CS-to-SCK and
+        SCK-to-CS minimums are tens of nanoseconds, and each MicroPython
+        statement between the pin writes and the transfer already takes
+        microseconds (measured: the three ``sleep_us`` calls and the
+        per-call buffer were a third of a 360 µs transaction). CRC on every
+        frame would show a timing problem as a CRC error.
+        """
+        cs = self._cs
+        read_data = self._rx4 if len(write_data) == 4 else bytearray(len(write_data))
+        cs.off()
         try:
-            read_data = bytearray(len(write_data))
             self._spi.write_readinto(write_data, read_data)
-            time.sleep_us(_SPI_HOLD_TIME_US)
-
         finally:
-            self._cs.on()
-            time.sleep_us(_SPI_CLK_MIN_PERIOD_US)
-
-        self.spi_flags(read_data[0], print_flags=False)
+            cs.on()
+        if read_data[0] & 0x10:
+            raise MAX22216SPIError("Communication error (COMER)")
         return read_data
 
+    reads = 0  # read_register calls across all instances, for profiling (the caller resets it)
+    # Read command frames by register address, CRC included: the two
+    # frames of a read never change for a given address, so they are
+    # built once. The second frame (address 0, data 0) is the same for
+    # every read.
+    _read_cmds: dict = {}
+    _read_cmd2: dict = {}
+
+    def _read_cmd(self, reg_addr: int) -> bytes:
+        key = (reg_addr & 0x7F, self._crc_enable)
+        cmd = MAX22216._read_cmds.get(key)
+        if cmd is None:
+            buf = bytearray(4 if self._crc_enable else 3)
+            buf[0] = reg_addr & 0x7F  # R/W=0 for read
+            if self._crc_enable:
+                buf[3] = self._crc5(buf[:3])
+            cmd = MAX22216._read_cmds[key] = bytes(buf)
+        return cmd
+
     def read_register(self, reg_addr: int) -> int:
-        """Read a 16-bit register value."""
-        cmd = bytearray(3 if not self._crc_enable else 4)
-        cmd[0] = reg_addr & 0x7F  # R/W=0 for read
-        cmd[1] = 0x00
-        cmd[2] = 0x00
-
-        if self._crc_enable:
-            cmd[3] = self._crc5(cmd[:3])
-
-        _ = self._spi_transaction(cmd)
-        cmd[0] = 0x00
-        if self._crc_enable:
-            cmd[3] = self._crc5(cmd[:3])
-        response = self._spi_transaction(cmd)
-
+        """Read a 16-bit register value (two transactions, one CRC check)."""
+        MAX22216.reads += 1
+        self._spi_transaction(self._read_cmd(reg_addr))
+        response = self._spi_transaction(self._read_cmd(0))
+        # ``response`` is the shared reply buffer: decode before any
+        # further transaction.
         data = (response[1] << 8) | response[2]
 
         if self._crc_enable and len(response) >= 4:
-            expected_crc = self._crc5(response[:3])
+            expected_crc = self._crc5(response, 3)
             if response[3] != expected_crc:
                 raise MAX22216CRCError(
                     f"CRC mismatch: expected 0x{expected_crc:02X},"
@@ -685,6 +763,16 @@ class MAX22216:
 
     def write_register(self, reg_addr: int, value: int) -> None:
         """Write a 16-bit register value."""
+        # A CTRL1 or GLOBAL_CTRL write may change the scale or PWM
+        # settings the diagnostics cache; forget them.
+        if reg_addr == _REG_GLOBAL_CTRL or (
+            reg_addr >= _REG_CFG0_CTRL1 and (reg_addr - _REG_CFG0_CTRL1) % _CH_STRIDE == 0
+        ):
+            self._scale_cache.clear()
+            self._kint_cache.clear()
+            self._pwm_cache.clear()
+        if reg_addr in (_REG_F_AC, _REG_U_AC_SCAN):
+            self._ac_cache = None
         cmd = bytearray(3 if not self._crc_enable else 4)
         cmd[0] = 0x80 | (reg_addr & 0x7F)  # R/W=1 for write
         cmd[1] = (value >> 8) & 0xFF
@@ -764,7 +852,7 @@ class MAX22216:
         return self.read_register(_REG_FAULT0)
 
     def fault0_clear(self) -> None:
-        self.write_register(_REG_FAULT0, 0xFFFF)
+        self._write_fault_clear(_REG_FAULT0)
 
     # ----- register 0x66: fault log 1
 
@@ -773,7 +861,22 @@ class MAX22216:
         return self.read_register(_REG_FAULT1)
 
     def fault1_clear(self) -> None:
-        self.write_register(_REG_FAULT1, 0xFFFF)
+        self._write_fault_clear(_REG_FAULT1)
+
+    def _write_fault_clear(self, reg: int) -> None:
+        """Write-1-to-clear a fault register, ignoring the COMER status.
+
+        The SPI status byte returned with a frame describes the state
+        *before* that frame took effect, so clearing a latched COMER always
+        reports COMER once more. A device whose supply was just switched on
+        latches COMER at power-on, and a caller that treated that report as
+        a failure abandoned its enable sequence part-way. The write itself
+        went out; a persistent fault shows up on the next read.
+        """
+        try:
+            self.write_register(reg, 0xFFFF)
+        except MAX22216SPIError:
+            pass
 
     # ----- per-channel: RES_THLD (resistance threshold)
 
@@ -855,8 +958,14 @@ class MAX22216:
 
         SNSF selects the sense FET R_ON (MAX22216 only, always 1 for
         MAX22217).  GAIN scales the internal current measurement.
-        Both affect all current-related diagnostics.
+        Both affect all current-related diagnostics. Cached per channel
+        until CTRL1 is written: the diagnostics pass read it (and the PWM
+        settings) for every channel every 500 ms, three reads that never
+        changed between configuration writes.
         """
+        cached = self._scale_cache.get(channel)
+        if cached is not None:
+            return cached
         ctrl1 = self.read_register(
             _REG_CFG0_CTRL1 + (channel * _CH_STRIDE)
         )
@@ -870,14 +979,20 @@ class MAX22216:
             snsf = 1.0
         else:
             snsf = self._SNSF_TABLE[snsf_reg]
-        return snsf * gain
+        scale = snsf * gain
+        self._scale_cache[channel] = scale
+        return scale
 
     def pwm_freq_khz(self, channel: int) -> float:
         """Return the actual PWM frequency for a channel in kHz.
 
         Reads F_PWM_M (master) from GLOBAL_CTRL and F_PWM (divider)
-        from the channel's CTRL1 register.
+        from the channel's CTRL1 register; cached per channel until
+        either register is written.
         """
+        cached = self._pwm_cache.get(channel)
+        if cached is not None:
+            return cached
         master_reg = self._read_bitfield(_BITFIELDS["F_PWM_M"])
         if master_reg >= len(self._PWM_FREQ_KHZ):
             master_reg = 0  # 0xD/0xE/0xF alias to 100kHz
@@ -886,7 +1001,9 @@ class MAX22216:
             _REG_CFG0_CTRL1 + (channel * _CH_STRIDE)
         )
         div_reg = (ctrl1 >> 8) & 0x03
-        return master_khz / self._PWM_DIV[div_reg]
+        khz = master_khz / self._PWM_DIV[div_reg]
+        self._pwm_cache[channel] = khz
+        return khz
 
     # Fault mask bit positions (9-bit mask, one per fault type)
     FMASK_UVM  = const(0x001)
@@ -979,6 +1096,9 @@ class MAX22216:
         l_meas_l2h: bool = False,
         l_meas_wcycles: int | None = None,
         l_nbr_calc: int | None = None,
+        ramp: int | None = None,
+        rupe: bool | None = None,
+        rdwe: bool | None = None,
     ) -> None:
         """Configure a channel's sequencer, DPM, and inductance settings.
 
@@ -997,7 +1117,8 @@ class MAX22216:
             res_thld: Resistance fault threshold (16-bit raw); None=keep current.
             iac_thld: AC current fault threshold (12-bit raw); None=keep current.
             dpm_thld: DPM current delta threshold (12-bit); None=chip default.
-            dpm_start: DPM start delay (8-bit); None=chip default.
+            dpm_start: DPM start current level (8-bit, ~65 mA per unit at default
+                scaling); None=chip default.
             dpm_min_nbr: DPM deglitch count (4-bit); None=chip default.
             end_hit_auto: Auto hit→hold on DPM detection; None=keep current.
             end_hit_to_hiz_auto: Auto hit→HiZ on DPM detection; None=keep current.
@@ -1005,6 +1126,9 @@ class MAX22216:
             l_meas_l2h: Enable inductance measurement during hit phase.
             l_meas_wcycles: Inductance measurement wait cycles (0-15); None=chip default.
             l_nbr_calc: Inductance measurement averaging periods (0-15); None=chip default.
+            ramp: Ramp slew rate value for CTRL0 (8-bit); None=0.
+            rupe: Ramp-up enable; None=off.
+            rdwe: Ramp-down enable; None=off.
         """
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
@@ -1018,17 +1142,23 @@ class MAX22216:
                 channel, dpm_thld, dpm_start, dpm_min_nbr,
                 end_hit_auto, end_hit_to_hiz_auto,
             )
+        else:
+            # DPM_EN persists until the device is reset, so it is written
+            # both ways: a configuration with DPM off used to keep faulting
+            # at the last threshold and silently block the channel.
+            self.dpm_disable(channel)
         # F_AC and U_AC_SCAN are global sine-wave generator parameters.
         # Write them unconditionally — the generator runs during DC_L
         # whenever L_MEAS_EN is set, not only during DC_L2H/DC_H when
         # l_meas_l2h/l_meas_h are enabled. L_MEAS_EN itself is toggled
-        # by the caller at fire time to avoid IND faults while idle.
+        # by the caller while the channel is driven, to avoid IND faults
+        # while idle.
         self.write_register(_REG_F_AC, f_ac)
         self.write_register(_REG_U_AC_SCAN, u_ac)
-        if l_meas_h:
-            setattr(self, f"l_meas_h_{channel}", 1)
-        if l_meas_l2h:
-            setattr(self, f"l_meas_l2h_{channel}", 1)
+        # Written both ways: these bits were only ever set, so a config
+        # that turned a measurement phase off left it running in hardware.
+        setattr(self, f"l_meas_h_{channel}", 1 if l_meas_h else 0)
+        setattr(self, f"l_meas_l2h_{channel}", 1 if l_meas_l2h else 0)
         if l_meas_wcycles is not None:
             setattr(self, f"l_meas_wcycles_{channel}", l_meas_wcycles & 0x0F)
         if l_nbr_calc is not None:
@@ -1037,7 +1167,13 @@ class MAX22216:
             self.write_register(_REG_CFG0_R_THLD + (channel * _CH_STRIDE), res_thld)
         if iac_thld is not None:
             self.write_register(_REG_CFG0_IND_1 + (channel * _CH_STRIDE), iac_thld & 0x0FFF)
-        self.config_ctrl0(channel, ol_en=ol_en)
+        self.config_ctrl0(
+            channel,
+            ol_en=ol_en,
+            ramp=0 if ramp is None else ramp,
+            rupe=bool(rupe),
+            rdwe=bool(rdwe),
+        )
 
     def config_ctrl0(
         self,
@@ -1103,7 +1239,8 @@ class MAX22216:
         Args:
             channel: Channel 0-3
             thld: DPM threshold (12-bit, 0-4095) - current delta for detection, None=keep default
-            start: DPM start delay in 10µs units (8-bit, 0-255), None=keep default
+            start: DPM start current level (8-bit, 0-255; ~65 mA per unit at default
+                scaling, see ma_to_dpm_start), None=keep default
             min_nbr: Minimum samples before detection valid (4-bit, 0-15), None=keep default
             end_hit_auto: Auto DC_L2H→DC_H switchover on valid BEMF dip detection.
                 Cuts hit phase short once plunger movement confirmed, saving power.
@@ -1197,18 +1334,28 @@ class MAX22216:
             "pwm": self.read_register(_REG_DIA0_PWM_DUTY + offset),
         }
 
-    def diagnostics(self, channel: int, vm: float | None = None) -> dict:
+    def diagnostics(self, channel: int, vm: float | None = None, live_only: bool = False) -> dict:
         """Read fully-scaled diagnostics for a channel.
 
         Args:
             channel: Channel 0-3.
-            vm: Pre-read VM voltage (avoids extra SPI read when
-                caller already has it). Read from hardware if None.
+            vm: The supply voltage in volts, when the caller has just read
+                ``vm``. VM is measured once per device, not per channel, so
+                a pass over the four channels reads it once and passes it
+                in rather than paying the SPI read four times. Read here
+                when None.
+            live_only: Read only the registers that move while a channel
+                is held (monitor current, AC current, PWM duty: three
+                reads) and take the event registers (DPM peak/valley,
+                travel, reaction, resistance) from the last full read;
+                the caller does a full read after each switching edge.
 
-        Returns dict with keys:
-            voltage, peak_ma, valley_ma, travel_ms, reaction_ms,
-            i_monitor_ma, i_ac_ma, resistance_ohm, inductance_mh,
-            pwm_duty
+        Returns the channel's dict (one per channel, filled in place, so
+        copy it to keep a snapshot) of integers: voltage_mv, peak_ma,
+        valley_ma, travel_us, reaction_us, i_monitor_ma, i_ac_ma,
+        resistance_mohm, inductance_uh, pwm_duty_permille. Integers so
+        that a periodic read allocates nothing; scale them where they are
+        displayed.
 
         Current scaling uses SNSF and GAIN read from CTRL1.
         Inductance uses U_AC_SCAN amplitude and F_AC frequency.
@@ -1217,69 +1364,84 @@ class MAX22216:
             raise ValueError("channel must be 0-3")
         offset = channel * _DIAG_STRIDE
         scale = self._channel_scale(channel)
-        k = scale * self.K_CDR
-        k_dpm = _DPM_CURRENT_SCALE * k
-
+        k_milli, k_dpm_centi = self._current_scales(channel, scale)
         f_khz = self.pwm_freq_khz(channel)
 
-        peak_ma = round(
-            self._read_diag(_REG_DIA0_I_DPM_PEAK + offset) * k_dpm,
-            2,
-        )
-        valley_ma = round(
-            self._read_diag(_REG_DIA0_I_DPM_VALLEY + offset) * k_dpm,
-            2,
-        )
-        # Timer registers are PWM counters, not ADC values — don't apply _read_diag filter
-        travel_raw = self.read_register(_REG_DIA0_TRAVEL_TIME + offset)
-        travel_ms = round(travel_raw / f_khz, 2) if f_khz else 0
-        react_raw = self.read_register(_REG_DIA0_REACTION_TIME + offset)
-        reaction_ms = round(react_raw / f_khz, 2) if f_khz else 0
-        i_mon_ma = round(
-            self._read_diag(_REG_DIA0_I_MONITOR + offset) * k, 2
-        )
-        i_ac_ma = round(
-            self._read_diag(_REG_DIA0_I_AC + offset) * k, 2
-        )
-        # Resistance: R(mΩ) = raw × K_R / (SNSF × GAIN)
-        res_raw = self._read_diag(_REG_DIA0_RES + offset)
-        res_ohm = round(res_raw * (self.K_R / scale), 2) if scale else 0
+        out = self._diag_out[channel]
+        if out is None:
+            out = self._diag_out[channel] = {
+                "voltage_mv": 0, "peak_ma": 0, "valley_ma": 0, "travel_us": 0,
+                "reaction_us": 0, "i_monitor_ma": 0, "i_ac_ma": 0,
+                "resistance_mohm": 0, "inductance_uh": 0, "pwm_duty_permille": 0,
+            }
+
+        # Every value is an integer (mA, µs, mΩ, µH, per mille, mV): the
+        # currents from integer scaling (raw ≤ 0xFF00 times a scale ≤
+        # 32544 centi-mA stays a small int), so a pass allocates neither
+        # a dict nor boxed floats. The event registers are read after a
+        # switching edge, not per pass, and may spend a float each.
+        if not (live_only and self._event_cache.get(channel) is not None):
+            peak_raw = self._read_diag(_REG_DIA0_I_DPM_PEAK + offset)
+            out["peak_ma"] = (peak_raw * k_dpm_centi + 50) // 100
+            valley_raw = self._read_diag(_REG_DIA0_I_DPM_VALLEY + offset)
+            out["valley_ma"] = (valley_raw * k_dpm_centi + 50) // 100
+            # Timer registers are PWM counters, not ADC values: no _read_diag filter
+            travel_raw = self.read_register(_REG_DIA0_TRAVEL_TIME + offset)
+            out["travel_us"] = int(travel_raw * 1000 / f_khz + 0.5) if f_khz else 0
+            react_raw = self.read_register(_REG_DIA0_REACTION_TIME + offset)
+            out["reaction_us"] = int(react_raw * 1000 / f_khz + 0.5) if f_khz else 0
+            # Resistance: R(mΩ) = raw × K_R / (SNSF × GAIN)
+            res_raw = self._read_diag(_REG_DIA0_RES + offset)
+            out["resistance_mohm"] = (
+                int(res_raw * (self.K_R / scale) * 1000 + 0.5) if scale else 0
+            )
+            self._event_cache[channel] = True
+        mon_raw = self._read_diag(_REG_DIA0_I_MONITOR + offset)
+        out["i_monitor_ma"] = (mon_raw * k_milli + 500) // 1000
+        ac_raw = self._read_diag(_REG_DIA0_I_AC + offset)
+        i_ac_ma = out["i_ac_ma"] = (ac_raw * k_milli + 500) // 1000
         pwm_raw = self._read_diag(_REG_DIA0_PWM_DUTY + offset)
-        pwm_pct = round((pwm_raw / _PWM_DUTY_MAX) * 100, 1) if pwm_raw else 0
+        out["pwm_duty_permille"] = pwm_raw * 1000 // _PWM_DUTY_MAX if pwm_raw else 0
 
         if vm is None:
             vm = self.vm
+        out["voltage_mv"] = int(vm * 1000 + 0.5)
 
         # Inductance: L = U_AC_SCAN / (2π × F_AC × I_AC)
         # F_AC (Hz) = F_PWM_M (Hz) × (F_AC_SCAN / 65535)
         # U_AC_SCAN voltage = K_VDR × 36 × U_AC_SCAN_reg (VDR mode)
         # All three inputs (I_AC, F_AC, U_AC_SCAN) must be non-zero
-        # for the calculation to be meaningful.
-        f_ac_reg = self.read_register(_REG_F_AC) & 0x0FFF
-        u_ac_reg = self.read_register(_REG_U_AC_SCAN) & 0x7FFF
-        f_hz = f_khz * 1000 * (f_ac_reg / _F_AC_DIVISOR) if f_khz else 0
-        u_ac_v = self.K_VDR * 36 * u_ac_reg
-        if i_ac_ma > 1 and f_hz > 0 and u_ac_reg > 0:
-            ind_mh = round(
-                (u_ac_v / (_TWO_PI * f_hz * (i_ac_ma / 1000)))
-                * 1000,
-                2,
-            )
-        else:
-            ind_mh = 0
+        # for the calculation to be meaningful. The two configuration
+        # registers are cached until written (they were two reads per
+        # channel per pass).
+        ind_uh = 0
+        if i_ac_ma > 1 and f_khz:
+            if self._ac_cache is None:
+                self._ac_cache = (
+                    self.read_register(_REG_F_AC) & 0x0FFF,
+                    self.read_register(_REG_U_AC_SCAN) & 0x7FFF,
+                )
+            f_ac_reg, u_ac_reg = self._ac_cache
+            if f_ac_reg > 0 and u_ac_reg > 0:
+                f_hz = f_khz * 1000 * (f_ac_reg / _F_AC_DIVISOR)
+                u_ac_v = self.K_VDR * 36 * u_ac_reg
+                ind_uh = int(
+                    (u_ac_v / (_TWO_PI * f_hz * (i_ac_ma / 1000))) * 1_000_000 + 0.5
+                )
+        out["inductance_uh"] = ind_uh
+        return out
 
-        return {
-            "voltage": round(vm, 2),
-            "peak_ma": peak_ma,
-            "valley_ma": valley_ma,
-            "travel_ms": travel_ms,
-            "reaction_ms": reaction_ms,
-            "i_monitor_ma": i_mon_ma,
-            "i_ac_ma": i_ac_ma,
-            "resistance_ohm": res_ohm,
-            "inductance_mh": ind_mh,
-            "pwm_duty": pwm_pct,
-        }
+    def _current_scales(self, channel: int, scale: float) -> tuple:
+        """Integer current scales for a channel: (milli-mA per LSB of the
+        monitor/AC registers, centi-mA per LSB of the DPM registers),
+        cached with the channel scale."""
+        cached = self._kint_cache.get(channel)
+        if cached is not None:
+            return cached
+        k = scale * self.K_CDR
+        cached = (int(k * 1000 + 0.5), int(_DPM_CURRENT_SCALE * k * 100 + 0.5))
+        self._kint_cache[channel] = cached
+        return cached
 
     # ----- channel on/off
 
@@ -1299,6 +1461,16 @@ class MAX22216:
         else:
             reg &= ~bit
         self.write_register(_REG_GLOBAL_CTRL, reg)
+
+    def all_channels_off(self) -> None:
+        """Clear CNTL0-3 in GLOBAL_CTRL (all channels off).
+
+        Preserves F_PWM_M. Used before (re)activation so a CNTL bit left
+        set across a disable or a supply loss cannot come back live.
+        """
+        reg = self.read_register(_REG_GLOBAL_CTRL)
+        if reg & 0x000F:
+            self.write_register(_REG_GLOBAL_CTRL, reg & ~0x000F)
 
     def channel_enabled(self, channel: int) -> bool:
         """Return True if the CNTL bit for a channel is set."""
@@ -1449,14 +1621,14 @@ class MAX22216:
                 print(f"  0x{base + i:02X} {name:14s} = 0x{val:04X}")
         f0 = self.fault0
         f1 = self.fault1
-        print(f"--- Faults ---")
+        print("--- Faults ---")
         print(f"  0x65 FAULT0         = 0x{f0:04X}")
         print(f"  0x66 FAULT1         = 0x{f1:04X}")
 
     def __repr__(self) -> str:
         return (
             f"<{self._device_variant}"
-            f" active={bool(self.active)}"
+            f" active={bool(self.global_config & 0x8000)}"
             f" crc={self._crc_enable}>"
         )
 
@@ -1482,7 +1654,6 @@ class MAX22216:
         for ch in range(4):
             off = ch * _CH_STRIDE
             ctrl0 = self.read_register(_REG_CFG0_CTRL0 + off)
-            ctrl1 = self.read_register(_REG_CFG0_CTRL1 + off)
             dpm1 = self.read_register(_REG_CFG0_DPM1 + off)
             mode = _MODES[(ctrl0 >> 14) & 0x3]
             on = bool(gctrl & (1 << ch))
