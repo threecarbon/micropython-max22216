@@ -33,7 +33,7 @@ from machine import Pin, SPI, SoftSPI
 from micropython import const
 
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 # global registers
@@ -117,7 +117,7 @@ _REG_DIA0_I_DPM_VALLEY  = const(0x42)
 _REG_DIA0_TRAVEL_TIME   = const(0x43)
 _REG_DIA0_REACTION_TIME = const(0x44)
 _REG_DIA0_I_MONITOR     = const(0x45)
-# UNUSED                = const(0x46)
+# 0x46 is not in the data sheet register map
 _REG_DIA0_I_AC          = const(0x47)
 _REG_DIA0_RES           = const(0x48)
 _REG_DIA0_PWM_DUTY      = const(0x49)
@@ -128,7 +128,7 @@ _REG_DIA1_I_DPM_VALLEY  = const(0x4B)
 _REG_DIA1_TRAVEL_TIME   = const(0x4C)
 _REG_DIA1_REACTION_TIME = const(0x4D)
 _REG_DIA1_I_MONITOR     = const(0x4E)
-# UNUSED                = const(0x4F)
+# 0x4F is not in the data sheet register map
 _REG_DIA1_I_AC          = const(0x50)
 _REG_DIA1_RES           = const(0x51)
 _REG_DIA1_PWM_DUTY      = const(0x52)
@@ -139,7 +139,7 @@ _REG_DIA2_I_DPM_VALLEY  = const(0x54)
 _REG_DIA2_TRAVEL_TIME   = const(0x55)
 _REG_DIA2_REACTION_TIME = const(0x56)
 _REG_DIA2_I_MONITOR     = const(0x57)
-# UNUSED                = const(0x58)
+# 0x58 is not in the data sheet register map
 _REG_DIA2_I_AC          = const(0x59)
 _REG_DIA2_RES           = const(0x5A)
 _REG_DIA2_PWM_DUTY      = const(0x5B)
@@ -150,7 +150,7 @@ _REG_DIA3_I_DPM_VALLEY  = const(0x5D)
 _REG_DIA3_TRAVEL_TIME   = const(0x5E)
 _REG_DIA3_REACTION_TIME = const(0x5F)
 _REG_DIA3_I_MONITOR     = const(0x60)
-# UNUSED                = const(0x61)
+# 0x61 is not in the data sheet register map
 _REG_DIA3_I_AC          = const(0x62)
 _REG_DIA3_RES           = const(0x63)
 _REG_DIA3_PWM_DUTY      = const(0x64)
@@ -356,7 +356,6 @@ _BITFIELDS = {
     "TRAVEL_TIME_0": (_REG_DIA0_TRAVEL_TIME, 0xFFFF, 0, "r"),
     "REACTION_TIME_0": (_REG_DIA0_REACTION_TIME, 0xFFFF, 0, "r"),
     "I_MONITOR_0": (_REG_DIA0_I_MONITOR, 0xFFFF, 0, "r"),
-    # "I_DC_0": (0x46, 0xFFFF, 0, "r"),
     "I_AC_0": (_REG_DIA0_I_AC, 0xFFFF, 0, "r"),
     "RES_0": (_REG_DIA0_RES, 0xFFFF, 0, "r"),
     "PWM_DUTYCYCLE_0": (_REG_DIA0_PWM_DUTY, 0xFFFF, 0, "r"),
@@ -365,7 +364,6 @@ _BITFIELDS = {
     "TRAVEL_TIME_1": (_REG_DIA1_TRAVEL_TIME, 0xFFFF, 0, "r"),
     "REACTION_TIME_1": (_REG_DIA1_REACTION_TIME, 0xFFFF, 0, "r"),
     "I_MONITOR_1": (_REG_DIA1_I_MONITOR, 0xFFFF, 0, "r"),
-    # "I_DC_1": (0x4F, 0xFFFF, 0, "r"),
     "I_AC_1": (_REG_DIA1_I_AC, 0xFFFF, 0, "r"),
     "RES_1": (_REG_DIA1_RES, 0xFFFF, 0, "r"),
     "PWM_DUTYCYCLE_1": (_REG_DIA1_PWM_DUTY, 0xFFFF, 0, "r"),
@@ -374,7 +372,6 @@ _BITFIELDS = {
     "TRAVEL_TIME_2": (_REG_DIA2_TRAVEL_TIME, 0xFFFF, 0, "r"),
     "REACTION_TIME_2": (_REG_DIA2_REACTION_TIME, 0xFFFF, 0, "r"),
     "I_MONITOR_2": (_REG_DIA2_I_MONITOR, 0xFFFF, 0, "r"),
-    # "I_DC_2": (0x58, 0xFFFF, 0, "r"),
     "I_AC_2": (_REG_DIA2_I_AC, 0xFFFF, 0, "r"),
     "RES_2": (_REG_DIA2_RES, 0xFFFF, 0, "r"),
     "PWM_DUTYCYCLE_2": (_REG_DIA2_PWM_DUTY, 0xFFFF, 0, "r"),
@@ -383,7 +380,6 @@ _BITFIELDS = {
     "TRAVEL_TIME_3": (_REG_DIA3_TRAVEL_TIME, 0xFFFF, 0, "r"),
     "REACTION_TIME_3": (_REG_DIA3_REACTION_TIME, 0xFFFF, 0, "r"),
     "I_MONITOR_3": (_REG_DIA3_I_MONITOR, 0xFFFF, 0, "r"),
-    # "I_DC_3": (0x61, 0xFFFF, 0, "r"),
     "I_AC_3": (_REG_DIA3_I_AC, 0xFFFF, 0, "r"),
     "RES_3": (_REG_DIA3_RES, 0xFFFF, 0, "r"),
     "PWM_DUTYCYCLE_3": (_REG_DIA3_PWM_DUTY, 0xFFFF, 0, "r"),
@@ -423,6 +419,14 @@ _TWO_PI                = 6.283185307
 _F_AC_DIVISOR          = const(65535)  # F_AC (Hz) = F_PWM_M × (F_AC_SCAN / 65535)
 _DPM_CURRENT_SCALE     = const(8)     # DPM current: raw × 8 × GAIN × SNSF × K_CDR
 _PWM_DUTY_MAX          = const(0x7FFF)
+
+
+def _check_range(name: str, value: int, high: int) -> None:
+    """Raise ValueError unless 0 <= value <= high. A setter refuses a value
+    outside its field: masking it wrote a different value than the one
+    asked for."""
+    if not 0 <= value <= high:
+        raise ValueError(f"{name} must be 0-{high}")
 
 
 class MAX22216SPIError(Exception):
@@ -762,12 +766,16 @@ class MAX22216:
         return data
 
     def write_register(self, reg_addr: int, value: int) -> None:
-        """Write a 16-bit register value."""
-        # A CTRL1 or GLOBAL_CTRL write may change the scale or PWM
-        # settings the diagnostics cache; forget them.
-        if reg_addr == _REG_GLOBAL_CTRL or (
-            reg_addr >= _REG_CFG0_CTRL1 and (reg_addr - _REG_CFG0_CTRL1) % _CH_STRIDE == 0
-        ):
+        """Write a 16-bit register value (0-65535, else ValueError)."""
+        if not 0 <= value <= 0xFFFF:
+            raise ValueError("value must be 0-65535")
+        # A CTRL1 write may change the scale and PWM divider the
+        # diagnostics cache, a GLOBAL_CTRL write the master PWM frequency
+        # (GAIN and SNSF live in CTRL1 only, so a channel switching on or
+        # off keeps the scales); forget them.
+        if reg_addr == _REG_GLOBAL_CTRL:
+            self._pwm_cache.clear()
+        elif reg_addr >= _REG_CFG0_CTRL1 and (reg_addr - _REG_CFG0_CTRL1) % _CH_STRIDE == 0:
             self._scale_cache.clear()
             self._kint_cache.clear()
             self._pwm_cache.clear()
@@ -789,16 +797,16 @@ class MAX22216:
     def _write_bitfield(self, bitfield: tuple, val: int) -> None:
         if "w" not in bitfield[3]:
             raise MAX22216BitfieldWriteError(f"{bitfield} is not writable")
+        limit = bitfield[1] >> bitfield[2]
+        if not 0 <= val <= limit:
+            raise ValueError(f"bitfield value must be 0-{limit}")
         if "w1c" in bitfield[3]:
             # Write-1-to-clear: write only the target bit(s), don't
             # read-modify-write (that would clear other latched faults).
-            self.write_register(
-                bitfield[0],
-                (val & (bitfield[1] >> bitfield[2])) << bitfield[2],
-            )
+            self.write_register(bitfield[0], val << bitfield[2])
         else:
             register = self.read_register(bitfield[0]) & ~bitfield[1] | (
-                (val & (bitfield[1] >> bitfield[2])) << bitfield[2]
+                val << bitfield[2]
             )
             self.write_register(bitfield[0], register)
 
@@ -812,11 +820,28 @@ class MAX22216:
     def master_chopping_frequency(self) -> int:
         return self._read_bitfield(_BITFIELDS["F_PWM_M"])
 
+    @property
+    def f_pwm_m(self) -> int:
+        return self._read_bitfield(_BITFIELDS["F_PWM_M"])
+
+    @f_pwm_m.setter
+    def f_pwm_m(self, value: int) -> None:
+        # 0x0-0xC: 100 kHz to 2.5 kHz (Table 4); 0xD-0xF are undefined
+        if not 0 <= value <= 12:
+            raise ValueError("f_pwm_m must be 0-12")
+        self._write_bitfield(_BITFIELDS["F_PWM_M"], value)
+
     # ----- register 0x01: global configuration
 
     @property
     def global_config(self) -> int:
         return self.read_register(_REG_GLOBAL_CFG)
+
+    # ----- register 0x02: status (live, not latched)
+
+    @property
+    def status(self) -> int:
+        return self.read_register(_REG_STATUS)
 
     # ----- register 0x05: motor voltage monitor
 
@@ -833,7 +858,9 @@ class MAX22216:
 
     @f_ac.setter
     def f_ac(self, value: int) -> None:
-        self.write_register(_REG_F_AC, value & 0x0FFF)
+        if not 0 <= value <= 0x0FFF:
+            raise ValueError("f_ac must be 0-4095")
+        self.write_register(_REG_F_AC, value)
 
     # ----- register 0x08: U_AC_SCAN (AC amplitude)
 
@@ -843,7 +870,9 @@ class MAX22216:
 
     @u_ac_scan.setter
     def u_ac_scan(self, value: int) -> None:
-        self.write_register(_REG_U_AC_SCAN, value & 0x7FFF)
+        if not 0 <= value <= 0x7FFF:
+            raise ValueError("u_ac_scan must be 0-32767")
+        self.write_register(_REG_U_AC_SCAN, value)
 
     # ----- register 0x65: fault log 0
 
@@ -863,7 +892,19 @@ class MAX22216:
     def fault1_clear(self) -> None:
         self._write_fault_clear(_REG_FAULT1)
 
-    def _write_fault_clear(self, reg: int) -> None:
+    def fault_clear_channel(self, channel: int) -> None:
+        """Write-1-to-clear the latched faults of one channel only.
+
+        FAULT0 holds OCP, HHF, OLF and DPM per channel and FAULT1 IND and
+        RES; the other channels' bits and the device-wide UVM, COMER and
+        OVT stay latched.
+        """
+        if not 0 <= channel <= 3:
+            raise ValueError("channel must be 0-3")
+        self._write_fault_clear(_REG_FAULT0, 0x1111 << channel)
+        self._write_fault_clear(_REG_FAULT1, (1 << channel) | (1 << (7 + channel)))
+
+    def _write_fault_clear(self, reg: int, mask: int = 0xFFFF) -> None:
         """Write-1-to-clear a fault register, ignoring the COMER status.
 
         The SPI status byte returned with a frame describes the state
@@ -874,7 +915,7 @@ class MAX22216:
         went out; a persistent fault shows up on the next read.
         """
         try:
-            self.write_register(reg, 0xFFFF)
+            self.write_register(reg, mask)
         except MAX22216SPIError:
             pass
 
@@ -888,7 +929,8 @@ class MAX22216:
     def set_res_thld(self, channel: int, value: int) -> None:
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
-        self.write_register(_REG_CFG0_R_THLD + (channel * _CH_STRIDE), value & 0xFFFF)
+        _check_range("res_thld", value, 0xFFFF)
+        self.write_register(_REG_CFG0_R_THLD + (channel * _CH_STRIDE), value)
 
     # ----- per-channel: IAC_THLD (inductance/I_AC threshold)
 
@@ -900,7 +942,8 @@ class MAX22216:
     def set_iac_thld(self, channel: int, value: int) -> None:
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
-        self.write_register(_REG_CFG0_IND_1 + (channel * _CH_STRIDE), value & 0x0FFF)
+        _check_range("iac_thld", value, 0x0FFF)
+        self.write_register(_REG_CFG0_IND_1 + (channel * _CH_STRIDE), value)
 
     # ----- unit conversion helpers
 
@@ -1005,6 +1048,53 @@ class MAX22216:
         self._pwm_cache[channel] = khz
         return khz
 
+    def master_pwm_khz(self) -> float:
+        """Return the master PWM frequency F_PWM_M in kHz (cached until
+        GLOBAL_CTRL is written)."""
+        cached = self._pwm_cache.get("m")
+        if cached is not None:
+            return cached
+        master_reg = self._read_bitfield(_BITFIELDS["F_PWM_M"])
+        if master_reg >= len(self._PWM_FREQ_KHZ):
+            master_reg = 0  # 0xD/0xE/0xF alias to 100kHz
+        khz = self._PWM_FREQ_KHZ[master_reg]
+        self._pwm_cache["m"] = khz
+        return khz
+
+    def pwm_counts_to_ms(self, counts: int, channel: int) -> float | None:
+        """Convert a count of channel PWM periods (TIME_L2H, TRAVEL_TIME,
+        REACTION_TIME) to milliseconds; None without a PWM frequency."""
+        f_khz = self.pwm_freq_khz(channel)
+        return counts / f_khz if f_khz else None
+
+    def ms_to_pwm_counts(self, ms: float, channel: int) -> int:
+        """Convert milliseconds to channel PWM periods (TIME_L2H), clamped
+        to the 16-bit register."""
+        return max(0, min(0xFFFF, int(ms * self.pwm_freq_khz(channel) + 0.5)))
+
+    def ma_to_iac_thld(self, ma: float, channel: int = 0) -> int:
+        """Convert an AC current in mA to IAC_THLD register codes.
+
+        IAC_THLD has the scale of I_AC: K_CDR x GAIN x SNSF per code, so
+        the channel's GAIN and SNSF settings apply. Clamped to 12 bits.
+        """
+        scale = self._channel_scale(channel)
+        return max(0, min(0x0FFF, int(ma / (scale * self.K_CDR) + 0.5)))
+
+    def register_file(self, first: int = _REG_GLOBAL_CTRL, last: int = _REG_CFG3_I) -> bytearray:
+        """Read registers ``first`` to ``last`` (inclusive) and return them
+        as consecutive little-endian 16-bit words.
+
+        The default range is the global and per-channel configuration
+        registers (0x00 to 0x40).
+        """
+        out = bytearray(2 * (last - first + 1))
+        for i in range(last - first + 1):
+            val = self.read_register(first + i)
+            out[2 * i] = val & 0xFF
+            out[2 * i + 1] = val >> 8
+        return out
+
     # Fault mask bit positions (9-bit mask, one per fault type)
     FMASK_UVM  = const(0x001)
     FMASK_COMF = const(0x002)
@@ -1062,10 +1152,12 @@ class MAX22216:
                          clear fault registers.
             fault_mask: 9-bit fault mask to apply after activation.
         """
+        # 0x0-0x8 (Table 1); 0x9-0xF are undefined
+        _check_range("chs", chs, 8)
         # Single read-modify-write: CHS + VDR + fault mask + ACTIVE
         reg = self.global_config
         reg &= 0x0060  # Preserve reserved[5], STAT_POL[6], CNTL_POL[7]
-        reg |= chs & 0x0F  # CHS[3:0]
+        reg |= chs  # CHS[3:0]
         reg |= int(vdr) << 4  # VDR_NDUTY[4]
         reg |= (fault_mask & 0x7F) << 8  # M_UVM..M_OVT[14:8]
         reg |= 0x8000  # ACTIVE[15]
@@ -1082,8 +1174,6 @@ class MAX22216:
         time_l2h: int,
         dpm_enable: bool,
         l_meas_h: bool,
-        f_ac: int,
-        u_ac: int,
         dc_l: int | None = None,
         res_thld: int | None = None,
         iac_thld: int | None = None,
@@ -1102,6 +1192,9 @@ class MAX22216:
     ) -> None:
         """Configure a channel's sequencer, DPM, and inductance settings.
 
+        The sine-wave generator's frequency and amplitude are one register
+        each per device, set with the ``f_ac`` and ``u_ac_scan`` properties.
+
         Args:
             channel: Channel 0-3.
             dc_h: Hold duty cycle (16-bit raw). Applied after excitation.
@@ -1109,10 +1202,6 @@ class MAX22216:
             time_l2h: Excitation duration (16-bit raw PWM cycles).
             dpm_enable: Enable plunger movement detection during excitation.
             l_meas_h: Enable inductance measurement during hold phase.
-            f_ac: Sine wave frequency for inductance/dither (12-bit raw).
-                Global register — shared across all channels.
-            u_ac: Sine wave amplitude (15-bit raw).
-                Global register — shared across all channels.
             dc_l: Off-phase duty cycle (16-bit raw); None=keep current.
             res_thld: Resistance fault threshold (16-bit raw); None=keep current.
             iac_thld: AC current fault threshold (12-bit raw); None=keep current.
@@ -1129,9 +1218,28 @@ class MAX22216:
             ramp: Ramp slew rate value for CTRL0 (8-bit); None=0.
             rupe: Ramp-up enable; None=off.
             rdwe: Ramp-down enable; None=off.
+
+        Every value is checked before the first write: one out of range
+        raises ValueError and the channel keeps its configuration.
         """
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
+        _check_range("dc_h", dc_h, 0xFFFF)
+        _check_range("dc_l2h", dc_l2h, 0xFFFF)
+        _check_range("time_l2h", time_l2h, 0xFFFF)
+        for name, value, high in (
+            ("dc_l", dc_l, 0xFFFF),
+            ("res_thld", res_thld, 0xFFFF),
+            ("iac_thld", iac_thld, 0x0FFF),
+            ("dpm_thld", dpm_thld, 0x0FFF),
+            ("dpm_start", dpm_start, 0xFF),
+            ("dpm_min_nbr", dpm_min_nbr, 0x0F),
+            ("l_meas_wcycles", l_meas_wcycles, 0x0F),
+            ("l_nbr_calc", l_nbr_calc, 0x0F),
+            ("ramp", ramp, 0xFF),
+        ):
+            if value is not None:
+                _check_range(name, value, high)
         self.write_register(_REG_CFG0_DC_H + (channel * _CH_STRIDE), dc_h)
         self.write_register(_REG_CFG0_DC_L2H + (channel * _CH_STRIDE), dc_l2h)
         self.write_register(_REG_CFG0_L2H_TIME + (channel * _CH_STRIDE), time_l2h)
@@ -1147,26 +1255,23 @@ class MAX22216:
             # both ways: a configuration with DPM off used to keep faulting
             # at the last threshold and silently block the channel.
             self.dpm_disable(channel)
-        # F_AC and U_AC_SCAN are global sine-wave generator parameters.
-        # Write them unconditionally — the generator runs during DC_L
-        # whenever L_MEAS_EN is set, not only during DC_L2H/DC_H when
-        # l_meas_l2h/l_meas_h are enabled. L_MEAS_EN itself is toggled
-        # by the caller while the channel is driven, to avoid IND faults
-        # while idle.
-        self.write_register(_REG_F_AC, f_ac)
-        self.write_register(_REG_U_AC_SCAN, u_ac)
+        # The sine-wave generator (F_AC, U_AC_SCAN: one per device) runs
+        # during DC_L whenever L_MEAS_EN is set, not only during
+        # DC_L2H/DC_H when l_meas_l2h/l_meas_h are enabled. L_MEAS_EN
+        # itself is toggled by the caller while the channel is driven, to
+        # avoid IND faults while idle.
         # Written both ways: these bits were only ever set, so a config
         # that turned a measurement phase off left it running in hardware.
         setattr(self, f"l_meas_h_{channel}", 1 if l_meas_h else 0)
         setattr(self, f"l_meas_l2h_{channel}", 1 if l_meas_l2h else 0)
         if l_meas_wcycles is not None:
-            setattr(self, f"l_meas_wcycles_{channel}", l_meas_wcycles & 0x0F)
+            setattr(self, f"l_meas_wcycles_{channel}", l_meas_wcycles)
         if l_nbr_calc is not None:
-            setattr(self, f"l_nbr_calc_{channel}", l_nbr_calc & 0x0F)
+            setattr(self, f"l_nbr_calc_{channel}", l_nbr_calc)
         if res_thld is not None:
             self.write_register(_REG_CFG0_R_THLD + (channel * _CH_STRIDE), res_thld)
         if iac_thld is not None:
-            self.write_register(_REG_CFG0_IND_1 + (channel * _CH_STRIDE), iac_thld & 0x0FFF)
+            self.write_register(_REG_CFG0_IND_1 + (channel * _CH_STRIDE), iac_thld)
         self.config_ctrl0(
             channel,
             ol_en=ol_en,
@@ -1203,15 +1308,17 @@ class MAX22216:
         """
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
+        _check_range("ctrl_mode", ctrl_mode, 3)
+        _check_range("ramp", ramp, 0xFF)
         value = (
-            (ramp & 0xFF)
+            ramp
             | (int(rupe) << 8)
             | (int(rmde) << 9)
             | (int(rdwe) << 10)
             | (int(h2l_en) << 11)
             | (int(ol_en) << 12)
             | (int(hhf_en) << 13)
-            | ((ctrl_mode & 0x3) << 14)
+            | (ctrl_mode << 14)
         )
         self.write_register(_REG_CFG0_CTRL0 + (channel * _CH_STRIDE), value)
 
@@ -1252,13 +1359,16 @@ class MAX22216:
 
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
+        if thld is not None:
+            _check_range("thld", thld, 0x0FFF)
+        if start is not None:
+            _check_range("start", start, 0xFF)
+        if min_nbr is not None:
+            _check_range("min_nbr", min_nbr, 0x0F)
 
         # Configure DPM_THLD in DPM0 register
         if thld is not None:
-            self.write_register(
-                _REG_CFG0_DPM0 + (channel * _CH_STRIDE),
-                thld & 0x0FFF,
-            )
+            self.write_register(_REG_CFG0_DPM0 + (channel * _CH_STRIDE), thld)
 
         # Configure DPM_START, DPM_MIN_NBR, END_HIT flags, and DPM_EN in DPM1
         dpm1_reg = _REG_CFG0_DPM1 + (channel * _CH_STRIDE)
@@ -1272,9 +1382,9 @@ class MAX22216:
         if need_rmw:
             dpm1_val = self.read_register(dpm1_reg)
             if start is not None:
-                dpm1_val = (dpm1_val & ~0x00FF) | (start & 0xFF)
+                dpm1_val = (dpm1_val & ~0x00FF) | start
             if min_nbr is not None:
-                dpm1_val = (dpm1_val & ~0x0F00) | ((min_nbr & 0x0F) << 8)
+                dpm1_val = (dpm1_val & ~0x0F00) | (min_nbr << 8)
             if end_hit_auto is not None:
                 if end_hit_auto:
                     dpm1_val |= 0x1000
@@ -1295,28 +1405,33 @@ class MAX22216:
 
         Current: raw × 8 × GAIN × SNSF × K_CDR (mA).
         Time: raw / (F_PWM_M × F_PWM_divider) in ms.
+
+        A value is None, never 0, when there is no measurement behind it,
+        as in diagnostics(): a current register held the invalid
+        mid-conversion value (0xFF00 and above), or (times) the PWM
+        frequency is zero.
         """
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
         offset = channel * _DIAG_STRIDE
-        peak = self.read_register(_REG_DIA0_I_DPM_PEAK + offset)
-        valley = self.read_register(_REG_DIA0_I_DPM_VALLEY + offset)
+        peak = self._read_diag(_REG_DIA0_I_DPM_PEAK + offset)
+        valley = self._read_diag(_REG_DIA0_I_DPM_VALLEY + offset)
         travel = self.read_register(_REG_DIA0_TRAVEL_TIME + offset)
         react = self.read_register(_REG_DIA0_REACTION_TIME + offset)
         scale = self._channel_scale(channel)
         k = _DPM_CURRENT_SCALE * scale * self.K_CDR
         f_khz = self.pwm_freq_khz(channel)
         return (
-            round(peak * k, 2),
-            round(valley * k, 2),
-            round(travel / f_khz, 2) if f_khz else 0,
-            round(react / f_khz, 2) if f_khz else 0,
+            None if peak is None else round(peak * k, 2),
+            None if valley is None else round(valley * k, 2),
+            round(travel / f_khz, 2) if f_khz else None,
+            round(react / f_khz, 2) if f_khz else None,
         )
 
-    def _read_diag(self, reg: int) -> int:
-        """Read diagnostic register, treating 0xFF00+ as 0 (invalid mid-ADC)."""
+    def _read_diag(self, reg: int) -> int | None:
+        """Read diagnostic register, None for 0xFF00+ (invalid mid-ADC)."""
         val = self.read_register(reg)
-        return 0 if val >= 0xFF00 else val
+        return None if val >= 0xFF00 else val
 
     def diagnostics_raw(self, channel: int) -> dict:
         """Get raw diagnostic register values for debugging."""
@@ -1352,10 +1467,19 @@ class MAX22216:
 
         Returns the channel's dict (one per channel, filled in place, so
         copy it to keep a snapshot) of integers: voltage_mv, peak_ma,
-        valley_ma, travel_us, reaction_us, i_monitor_ma, i_ac_ma,
-        resistance_mohm, inductance_uh, pwm_duty_permille. Integers so
+        valley_ma, travel_us, reaction_us, i_monitor_ma (signed), i_ac_ma,
+        resistance_mohm, inductance_uh, pwm_duty_permille, and the raw
+        counts travel_raw, reaction_raw (PWM periods) and pwm_duty_raw.
+        Integers so
         that a periodic read allocates nothing; scale them where they are
-        displayed.
+        displayed. A field is None, never 0, when there is no measurement
+        behind it: its register held the invalid mid-conversion value
+        (0xFF00 and above), the PWM frequency or the current scale it
+        needs is zero, (resistance) its register reads 0, which is no
+        measurement: the chip measures resistance only during an
+        inductance measurement, or (inductance) the AC current, F_AC or
+        U_AC_SCAN it is computed from is not usable. Any other 0 is a
+        reading of 0.
 
         Current scaling uses SNSF and GAIN read from CTRL1.
         Inductance uses U_AC_SCAN amplitude and F_AC frequency.
@@ -1370,38 +1494,57 @@ class MAX22216:
         out = self._diag_out[channel]
         if out is None:
             out = self._diag_out[channel] = {
-                "voltage_mv": 0, "peak_ma": 0, "valley_ma": 0, "travel_us": 0,
-                "reaction_us": 0, "i_monitor_ma": 0, "i_ac_ma": 0,
-                "resistance_mohm": 0, "inductance_uh": 0, "pwm_duty_permille": 0,
+                "voltage_mv": None, "peak_ma": None, "valley_ma": None,
+                "travel_us": None, "reaction_us": None, "i_monitor_ma": None,
+                "i_ac_ma": None, "resistance_mohm": None, "inductance_uh": None,
+                "pwm_duty_permille": None, "travel_raw": None, "reaction_raw": None,
+                "pwm_duty_raw": None,
             }
 
-        # Every value is an integer (mA, µs, mΩ, µH, per mille, mV): the
-        # currents from integer scaling (raw ≤ 0xFF00 times a scale ≤
-        # 32544 centi-mA stays a small int), so a pass allocates neither
-        # a dict nor boxed floats. The event registers are read after a
-        # switching edge, not per pass, and may spend a float each.
+        # Every value is an integer (mA, µs, mΩ, µH, per mille, mV) or
+        # None: the currents from integer scaling (raw < 0xFF00 times a
+        # scale ≤ 32544 centi-mA stays a small int), so a pass allocates
+        # neither a dict nor boxed floats. The event registers are read
+        # after a switching edge, not per pass, and may spend a float each.
         if not (live_only and self._event_cache.get(channel) is not None):
             peak_raw = self._read_diag(_REG_DIA0_I_DPM_PEAK + offset)
-            out["peak_ma"] = (peak_raw * k_dpm_centi + 50) // 100
+            out["peak_ma"] = (
+                None if peak_raw is None else (peak_raw * k_dpm_centi + 50) // 100
+            )
             valley_raw = self._read_diag(_REG_DIA0_I_DPM_VALLEY + offset)
-            out["valley_ma"] = (valley_raw * k_dpm_centi + 50) // 100
+            out["valley_ma"] = (
+                None if valley_raw is None else (valley_raw * k_dpm_centi + 50) // 100
+            )
             # Timer registers are PWM counters, not ADC values: no _read_diag filter
-            travel_raw = self.read_register(_REG_DIA0_TRAVEL_TIME + offset)
-            out["travel_us"] = int(travel_raw * 1000 / f_khz + 0.5) if f_khz else 0
-            react_raw = self.read_register(_REG_DIA0_REACTION_TIME + offset)
-            out["reaction_us"] = int(react_raw * 1000 / f_khz + 0.5) if f_khz else 0
-            # Resistance: R(mΩ) = raw × K_R / (SNSF × GAIN)
+            travel_raw = out["travel_raw"] = self.read_register(_REG_DIA0_TRAVEL_TIME + offset)
+            out["travel_us"] = int(travel_raw * 1000 / f_khz + 0.5) if f_khz else None
+            react_raw = out["reaction_raw"] = self.read_register(_REG_DIA0_REACTION_TIME + offset)
+            out["reaction_us"] = int(react_raw * 1000 / f_khz + 0.5) if f_khz else None
+            # Resistance: R(mΩ) = raw × K_R / (SNSF × GAIN). The chip
+            # measures it only during an inductance measurement (average V
+            # over average I); a code of 0 is no measurement, not 0 ohm.
             res_raw = self._read_diag(_REG_DIA0_RES + offset)
             out["resistance_mohm"] = (
-                int(res_raw * (self.K_R / scale) * 1000 + 0.5) if scale else 0
+                int(res_raw * (self.K_R / scale) * 1000 + 0.5)
+                if scale and res_raw else None
             )
             self._event_cache[channel] = True
-        mon_raw = self._read_diag(_REG_DIA0_I_MONITOR + offset)
-        out["i_monitor_ma"] = (mon_raw * k_milli + 500) // 1000
+        # I_MONITOR is signed (13 bits per channel, the 16-bit sum in
+        # parallel configurations), so the 0xFF00 filter of the unsigned
+        # registers does not apply: 0xFF00 and above are small negatives.
+        mon_raw = self.read_register(_REG_DIA0_I_MONITOR + offset)
+        if mon_raw & 0x8000:
+            out["i_monitor_ma"] = -(((0x10000 - mon_raw) * k_milli + 500) // 1000)
+        else:
+            out["i_monitor_ma"] = (mon_raw * k_milli + 500) // 1000
         ac_raw = self._read_diag(_REG_DIA0_I_AC + offset)
-        i_ac_ma = out["i_ac_ma"] = (ac_raw * k_milli + 500) // 1000
-        pwm_raw = self._read_diag(_REG_DIA0_PWM_DUTY + offset)
-        out["pwm_duty_permille"] = pwm_raw * 1000 // _PWM_DUTY_MAX if pwm_raw else 0
+        i_ac_ma = out["i_ac_ma"] = (
+            None if ac_raw is None else (ac_raw * k_milli + 500) // 1000
+        )
+        pwm_raw = out["pwm_duty_raw"] = self._read_diag(_REG_DIA0_PWM_DUTY + offset)
+        out["pwm_duty_permille"] = (
+            None if pwm_raw is None else pwm_raw * 1000 // _PWM_DUTY_MAX
+        )
 
         if vm is None:
             vm = self.vm
@@ -1413,17 +1556,20 @@ class MAX22216:
         # All three inputs (I_AC, F_AC, U_AC_SCAN) must be non-zero
         # for the calculation to be meaningful. The two configuration
         # registers are cached until written (they were two reads per
-        # channel per pass).
-        ind_uh = 0
-        if i_ac_ma > 1 and f_khz:
+        # channel per pass). None when any input is not usable.
+        ind_uh = None
+        if i_ac_ma is not None and i_ac_ma > 1:
             if self._ac_cache is None:
                 self._ac_cache = (
                     self.read_register(_REG_F_AC) & 0x0FFF,
                     self.read_register(_REG_U_AC_SCAN) & 0x7FFF,
                 )
             f_ac_reg, u_ac_reg = self._ac_cache
+            # F_AC derives from the master frequency F_PWM_M, not the
+            # channel's divided PWM frequency.
+            master_khz = self.master_pwm_khz()
             if f_ac_reg > 0 and u_ac_reg > 0:
-                f_hz = f_khz * 1000 * (f_ac_reg / _F_AC_DIVISOR)
+                f_hz = master_khz * 1000 * (f_ac_reg / _F_AC_DIVISOR)
                 u_ac_v = self.K_VDR * 36 * u_ac_reg
                 ind_uh = int(
                     (u_ac_v / (_TWO_PI * f_hz * (i_ac_ma / 1000))) * 1_000_000 + 0.5
@@ -1483,13 +1629,15 @@ class MAX22216:
     def i_monitor(self, channel: int) -> float:
         """Read instantaneous current for a channel in mA.
 
-        I_MONITOR(mA) = K_CDR × GAIN × SNSF × I_MONITOR[15:0]
+        I_MONITOR(mA) = K_CDR × GAIN × SNSF × I_MONITOR[15:0], signed.
         """
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
         raw = self.read_register(
             _REG_DIA0_I_MONITOR + channel * _DIAG_STRIDE
         )
+        if raw & 0x8000:
+            raw -= 0x10000  # signed: the current can read below zero
         scale = self._channel_scale(channel)
         return round(raw * scale * self.K_CDR, 2)
 
@@ -1516,24 +1664,35 @@ class MAX22216:
             gain: CDR gain (0=1, 1=1/2, 2=1/3, 3=1/4)
             snsf: Sense scaling (0=full, 1=2/3, 2=1/3) — MAX22216 only
 
-        None values leave the current setting unchanged.
+        None values leave the current setting unchanged. A value outside
+        its field raises ValueError and nothing is written.
         """
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
+        for name, value, high in (
+            ("hsnls", hsnls, 1),
+            ("f_pwm", f_pwm, 3),
+            ("slew_rate", slew_rate, 3),
+            ("t_blanking", t_blanking, 3),
+            ("gain", gain, 3),
+            ("snsf", snsf, 3),
+        ):
+            if value is not None:
+                _check_range(name, value, high)
         reg_addr = _REG_CFG0_CTRL1 + (channel * _CH_STRIDE)
         val = self.read_register(reg_addr)
         if snsf is not None:
-            val = (val & ~0x0003) | (snsf & 0x03)
+            val = (val & ~0x0003) | snsf
         if gain is not None:
-            val = (val & ~0x000C) | ((gain & 0x03) << 2)
+            val = (val & ~0x000C) | (gain << 2)
         if slew_rate is not None:
-            val = (val & ~0x0030) | ((slew_rate & 0x03) << 4)
+            val = (val & ~0x0030) | (slew_rate << 4)
         if t_blanking is not None:
-            val = (val & ~0x00C0) | ((t_blanking & 0x03) << 6)
+            val = (val & ~0x00C0) | (t_blanking << 6)
         if f_pwm is not None:
-            val = (val & ~0x0300) | ((f_pwm & 0x03) << 8)
+            val = (val & ~0x0300) | (f_pwm << 8)
         if hsnls is not None:
-            val = (val & ~0x0400) | ((hsnls & 0x01) << 10)
+            val = (val & ~0x0400) | (hsnls << 10)
         self.write_register(reg_addr, val)
 
     # ----- PI controller configuration
@@ -1550,16 +1709,20 @@ class MAX22216:
             channel: Channel 0-3.
             kp: Proportional gain in Q8.8 format (0-255.996).
             ki: Integral gain in Q8.8 format (0-255.996).
+
+        A gain outside the range raises ValueError and nothing is written.
         """
         if not 0 <= channel <= 3:
             raise ValueError("channel must be 0-3")
+        kp_raw = int(kp * 256)
+        ki_raw = int(ki * 256)
+        if not 0 <= kp_raw <= 0xFFFF:
+            raise ValueError("kp must be 0-255.996")
+        if not 0 <= ki_raw <= 0xFFFF:
+            raise ValueError("ki must be 0-255.996")
         offset = channel * _CH_STRIDE
-        self.write_register(
-            _REG_CFG0_P + offset, int(kp * 256) & 0xFFFF
-        )
-        self.write_register(
-            _REG_CFG0_I + offset, int(ki * 256) & 0xFFFF
-        )
+        self.write_register(_REG_CFG0_P + offset, kp_raw)
+        self.write_register(_REG_CFG0_I + offset, ki_raw)
 
     # ----- status register
 

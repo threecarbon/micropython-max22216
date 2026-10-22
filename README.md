@@ -43,6 +43,7 @@ Single file. No dependencies. MicroPython, not CircuitPython.
 - Property accessors for all register bitfields (generated at import time)
 - Register dump and `test()` diagnostic summary
 - MAX22216 and MAX22217 variant support (automatic current scaling)
+- Every setter checks its argument against the register field and raises `ValueError`; a value is never masked into a different one
 
 ## Not Yet Implemented
 
@@ -95,12 +96,17 @@ drv.config_channel(
     time_l2h=5000,      # hit duration (PWM cycles)
     dpm_enable=True,     # plunger movement detection
     l_meas_h=True,       # inductance measurement during hold
-    f_ac=500,            # AC frequency for inductance measurement
-    u_ac=1000,           # AC amplitude
     res_thld=2000,       # resistance fault threshold
     iac_thld=500,        # inductance fault threshold
 )
+
+# The sine-wave generator for inductance measurement is one register pair per
+# device, not per channel
+drv.f_ac = 500          # AC frequency (12-bit raw)
+drv.u_ac_scan = 1000    # AC amplitude (15-bit raw)
 ```
+
+Every value is checked before the first write: one outside its field raises `ValueError` and the channel keeps its configuration.
 
 `dpm_enable=False` clears DPM_EN (it persists across configurations otherwise), `l_meas_h` and `l_meas_l2h` are written both ways, and `ramp`, `rupe` and `rdwe` set the ramp controls in CTRL0. `dpm_start` is a current level (about 65 mA per unit at default scaling; see `ma_to_dpm_start()`), not a delay.
 
@@ -122,7 +128,12 @@ print(f"Current: {diag['i_monitor_ma']} mA")
 print(f"Resistance: {diag['resistance_mohm'] / 1000} Ω")
 print(f"Inductance: {diag['inductance_uh'] / 1000} mH")
 print(f"PWM duty: {diag['pwm_duty_permille'] / 10} %")
-# also: peak_ma, valley_ma, travel_us, reaction_us, i_ac_ma
+# also: peak_ma, valley_ma, travel_us, reaction_us, i_ac_ma, and the raw
+# counts travel_raw, reaction_raw (PWM periods) and pwm_duty_raw.
+# A field is None, never 0, when there is no measurement behind it: the
+# register held the mid-conversion value (0xFF00 and above), the PWM
+# frequency or current scale it needs is zero, or (resistance) the chip has
+# not measured since the last inductance measurement. i_monitor_ma is signed.
 
 # The dict is one object per channel, refilled in place: copy it to keep a snapshot
 snapshot = dict(diag)
@@ -143,6 +154,17 @@ raw = drv.diagnostics_raw(0)
 
 # Motor voltage
 print(f"VM: {drv.vm:.2f}V")
+
+# Conversions between register codes and units, using the channel's PWM
+# frequency and current scale
+ms = drv.pwm_counts_to_ms(diag["travel_raw"], 0)
+drv.time_l2h_0 = drv.ms_to_pwm_counts(50, 0)
+drv.iac_thld_0 = drv.ma_to_iac_thld(120, 0)
+print(f"master PWM: {drv.master_pwm_khz()} kHz")
+
+# The global and per-channel configuration registers (0x00 to 0x40) as
+# consecutive little-endian 16-bit words, e.g. to compare against a known file
+words = drv.register_file()
 ```
 
 ### Faults
@@ -155,6 +177,14 @@ print(f"Faults: 0x{drv.fault:08X}")
 # the state before the frame took effect, so a COMER reported by the clear
 # itself is ignored; a persistent fault shows up on the next read.
 drv.fault_clear()
+
+# Clear one channel's latched faults only (OCP, HHF, OLF, DPM in FAULT0 and
+# IND, RES in FAULT1); the other channels' bits and the device-wide UVM,
+# COMER and OVT stay latched
+drv.fault_clear_channel(0)
+
+# Live status register (not latched)
+print(f"status: 0x{drv.status:04X}")
 
 # Read individual fault bits via bitfield accessors
 if drv.ocp0_fault:
@@ -173,6 +203,7 @@ All register bitfields are available as properties on the instance:
 drv.active = 1
 drv.vdr_nduty = 1
 drv.chs = 0
+drv.f_pwm_m = 3        # master PWM frequency code (0-12, Table 4)
 
 # Per-channel (suffixed with _0 through _3)
 drv.dc_h_0 = 8000
