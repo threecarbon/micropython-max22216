@@ -33,7 +33,7 @@ from machine import Pin, SPI, SoftSPI
 from micropython import const
 
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"
 
 
 # global registers
@@ -587,10 +587,8 @@ class MAX22216:
         self._kint_cache: dict = {}  # channel -> (k_milli, k_dpm_centi) integer current scales
         self._pwm_cache: dict = {}
         self._ac_cache: tuple | None = None  # (F_AC, U_AC_SCAN) until written
-        # One output dict per channel, filled in place by diagnostics():
-        # a fresh dict and a dozen boxed floats per channel per pass were
-        # ~6 KB/s of heap growth and an automatic 38 ms collection every
-        # few seconds while channels were open.
+        # One output dict per channel, filled in place by diagnostics(),
+        # so a periodic read allocates neither a dict nor boxed floats.
         self._diag_out: list = [None, None, None, None]
         # Event registers (DPM peak/valley, travel, reaction, resistance)
         # latch at a switching edge and do not move while a channel is
@@ -968,7 +966,7 @@ class MAX22216:
 
             DPM_START(mA) = 64 × K_CDR × GAIN × SNSF × DPM_START[7:0]
 
-        Returns a value in range [1, 255] (never 0 — setting 0 would
+        Returns a value in range [1, 255] (never 0: setting 0 would
         trigger immediate search on power-up and produce spurious
         results during the pre-ramp settling period).
         """
@@ -1002,9 +1000,8 @@ class MAX22216:
         SNSF selects the sense FET R_ON (MAX22216 only, always 1 for
         MAX22217).  GAIN scales the internal current measurement.
         Both affect all current-related diagnostics. Cached per channel
-        until CTRL1 is written: the diagnostics pass read it (and the PWM
-        settings) for every channel every 500 ms, three reads that never
-        changed between configuration writes.
+        until CTRL1 is written, since only a configuration write changes
+        it.
         """
         cached = self._scale_cache.get(channel)
         if cached is not None:
@@ -1555,8 +1552,8 @@ class MAX22216:
         # U_AC_SCAN voltage = K_VDR × 36 × U_AC_SCAN_reg (VDR mode)
         # All three inputs (I_AC, F_AC, U_AC_SCAN) must be non-zero
         # for the calculation to be meaningful. The two configuration
-        # registers are cached until written (they were two reads per
-        # channel per pass). None when any input is not usable.
+        # registers are cached until written. None when any input is not
+        # usable.
         ind_uh = None
         if i_ac_ma is not None and i_ac_ma > 1:
             if self._ac_cache is None:
@@ -1662,7 +1659,7 @@ class MAX22216:
             slew_rate: 0=fast, 1=400V/µs, 2=200V/µs, 3=100V/µs
             t_blanking: Blanking time (0=0, 1=24, 2=48, 3=96 clock cycles)
             gain: CDR gain (0=1, 1=1/2, 2=1/3, 3=1/4)
-            snsf: Sense scaling (0=full, 1=2/3, 2=1/3) — MAX22216 only
+            snsf: Sense scaling (0=full, 1=2/3, 2=1/3) (MAX22216 only)
 
         None values leave the current setting unchanged. A value outside
         its field raises ValueError and nothing is written.
